@@ -16,7 +16,7 @@ segment_queue = queue.Queue()
 HOST = '0.0.0.0'  # écoute toutes les IP
 PORT = 5000
 NB_WORKERS = 2
-SEGMENT_FILE = 'grand_texte.txt'
+SEGMENT_FILE = 'yelp_academic_dataset_review.json'
 
 
 results = []  # résultats partiels reçus
@@ -26,11 +26,22 @@ def clean_text(text):
     return ''.join(c.lower() if c.isalnum() or c.isspace() else ' ' for c in text)
 
 def map_function(segment):
-    word_count = defaultdict(int)
-    words = clean_text(segment).split()
-    for word in words:
-        word_count[word] += 1
-    return word_count
+    import json
+    from collections import defaultdict
+
+    pizza_count = 0
+    for line in segment.strip().splitlines():
+        try:
+            review = json.loads(line)
+            text = review.get("text", "").lower()
+            stars = review.get("stars", 0)
+            if stars == 5 and "pizza" in text:
+                pizza_count += 1
+        except json.JSONDecodeError:
+            continue
+
+    return {"pizza_5stars": pizza_count}
+
 
 # ----------- FONCTION REDUCE -----------
 def reduce_function(results_list):
@@ -39,6 +50,7 @@ def reduce_function(results_list):
         for word, count in result.items():
             final_result[word] += count
     return dict(final_result)
+
 
 # ----------- GESTION D'UN WORKER -----------
 def handle_worker(conn, addr):
@@ -81,8 +93,16 @@ def handle_worker(conn, addr):
 def split_file(filename, n):
     with open(filename, 'r', encoding='utf-8') as f:
         lines = f.readlines()
+
     size = len(lines) // n
-    return [''.join(lines[i*size:(i+1)*size]) for i in range(n)]
+    segments = [''.join(lines[i*size:(i+1)*size]) for i in range(n)]
+
+    # Ajouter les lignes restantes au dernier segment
+    if len(lines) % n != 0:
+        segments[-1] += ''.join(lines[n*size:])
+
+    return segments
+
 
 # ----------- SERVEUR PRINCIPAL -----------
 def start_server():
