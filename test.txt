@@ -1,0 +1,11 @@
+Le MapReduce est un modèle de programmation pour le traitement parallèle de grands ensembles de données.
+Le modèle MapReduce a été créé par Google pour traiter de grandes quantités de données sur des clusters de machines.
+La phase Map traite les données en parallèle sur plusieurs machines.
+La phase Reduce agrège les résultats de la phase Map.
+Le MapReduce est très utile pour le traitement de données distribuées.
+Les frameworks comme Hadoop et Spark utilisent le modèle MapReduce.
+Le traitement distribué permet d'accélérer le traitement des données.
+Les données sont divisées en chunks pour être traitées en parallèle.
+Le coordinateur distribue les tâches aux workers.
+Les workers traitent les chunks et renvoient les résultats.
+Le coordinateur agrège les résultats pour obtenir le résultat final. 

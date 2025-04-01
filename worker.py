@@ -8,7 +8,7 @@ from collections import defaultdict
 import time
 
 # ----------- CONFIGURATION -----------
-HOST = '172.20.10.2'  # IP du coordinateur 
+HOST = '192.168.71.103'  # IP du coordinateur 
 PORT = 5000
 
 # ----------- FONCTION MAP -----------
@@ -25,7 +25,7 @@ def map_function(segment):
 # ----------- CLIENT -----------
 def worker():
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    #time.sleep(10)  # ralentir volontairement de 10 secondes
+    time.sleep(10)  # ralentir volontairement de 10 secondes
     sock.connect((HOST, PORT))
     data = b""
     while not data.endswith(b"\n"):
