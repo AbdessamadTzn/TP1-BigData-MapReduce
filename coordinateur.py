@@ -6,6 +6,11 @@ import socket
 import threading
 import json
 from collections import defaultdict
+import queue
+import time
+
+segment_queue = queue.Queue()
+
 
 # ----------- CONFIGURATION -----------
 HOST = '0.0.0.0'  # écoute toutes les IP
@@ -36,17 +41,38 @@ def reduce_function(results_list):
     return dict(final_result)
 
 # ----------- GESTION D'UN WORKER -----------
-def handle_worker(conn, addr, segment):
-    print(f"[INFO] Connexion de {addr}")
-    segment_data = json.dumps({"segment": segment}) + '\n'
-    conn.sendall(segment_data.encode())
-    data = b""
-    while not data.endswith(b"\n"):
-        data += conn.recv(4096)
-    response = json.loads(data.decode())
-    results.append(response['result'])
-    print(f"[INFO] Résultat reçu de {addr}")
-    conn.close()
+def handle_worker(conn, addr):
+    try:
+        segment = segment_queue.get_nowait()
+    except queue.Empty:
+        print(f"[INFO] Aucun segment à attribuer pour {addr}")
+        conn.close()
+        return
+
+    try:
+        print(f"[INFO] Envoi segment à {addr}")
+        segment_data = json.dumps({"segment": segment}) + '\n'
+        conn.sendall(segment_data.encode())
+        conn.settimeout(10)  # 10 secondes max pour réponse
+
+        data = b""
+        while not data.endswith(b"\n"):
+            chunk = conn.recv(4096)
+            if not chunk:
+                raise ConnectionError("Connexion interrompue")
+            data += chunk
+
+        response = json.loads(data.decode())
+        results.append(response['result'])
+        print(f"[INFO] Résultat reçu de {addr}")
+
+    except (ConnectionError, socket.timeout, json.JSONDecodeError) as e:
+        print(f"[ERREUR] Worker {addr} a échoué : {e}")
+        segment_queue.put(segment)  # remettre le segment dans la file
+
+    finally:
+        conn.close()
+
 
 # ----------- DÉCOUPAGE DU FICHIER -----------
 def split_file(filename, n):
@@ -58,27 +84,26 @@ def split_file(filename, n):
 # ----------- SERVEUR PRINCIPAL -----------
 def start_server():
     segments = split_file(SEGMENT_FILE, NB_WORKERS)
-    print("[INFO] Fichier découpé en segments")
+    for seg in segments:
+        segment_queue.put(seg)
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind((HOST, PORT))
     server.listen(NB_WORKERS)
     print(f"[INFO] Serveur en écoute sur {HOST}:{PORT}")
 
-    threads = []
-    for i in range(NB_WORKERS):
+    while not segment_queue.empty():
         conn, addr = server.accept()
-        t = threading.Thread(target=handle_worker, args=(conn, addr, segments[i]))
-        t.start()
-        threads.append(t)
+        threading.Thread(target=handle_worker, args=(conn, addr)).start()
 
-    for t in threads:
-        t.join()
+    # attendre un peu que tous les threads finissent
+    time.sleep(3)
 
     final = reduce_function(results)
     with open("resultat_final.json", "w", encoding="utf-8") as f:
         json.dump(final, f, indent=2, ensure_ascii=False)
     print("[INFO] Résultat final écrit dans resultat_final.json")
+
 
 if __name__ == '__main__':
     start_server()
