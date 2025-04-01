@@ -53,13 +53,15 @@ def handle_worker(conn, addr):
         print(f"[INFO] Envoi segment à {addr}")
         segment_data = json.dumps({"segment": segment}) + '\n'
         conn.sendall(segment_data.encode())
+
+        # ➤ On met un timeout ici
         conn.settimeout(10)  # 10 secondes max pour réponse
 
         data = b""
         while not data.endswith(b"\n"):
             chunk = conn.recv(4096)
             if not chunk:
-                raise ConnectionError("Connexion interrompue")
+                raise ConnectionError("Le worker a fermé la connexion sans envoyer de données.")
             data += chunk
 
         response = json.loads(data.decode())
@@ -68,10 +70,11 @@ def handle_worker(conn, addr):
 
     except (ConnectionError, socket.timeout, json.JSONDecodeError) as e:
         print(f"[ERREUR] Worker {addr} a échoué : {e}")
-        segment_queue.put(segment)  # remettre le segment dans la file
+        segment_queue.put(segment)  # Réassigner le segment
 
     finally:
         conn.close()
+
 
 
 # ----------- DÉCOUPAGE DU FICHIER -----------

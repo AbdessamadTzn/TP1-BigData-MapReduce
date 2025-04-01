@@ -32,7 +32,8 @@ def worker():
         data += sock.recv(4096)
     received = json.loads(data.decode())
     segment = received['segment']
-    result = map_function(segment)
+    # Ajoute cette ligne ici 👇 pour simuler un worker lent
+    time.sleep(10)
     msg = json.dumps({"result": result}) + '\n'
     sock.sendall(msg.encode())
     sock.close()
