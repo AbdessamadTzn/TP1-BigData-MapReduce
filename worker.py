@@ -6,6 +6,7 @@ import socket
 import json
 from collections import defaultdict
 import time
+import threading
 
 # ----------- CONFIGURATION -----------
 HOST = '172.20.10.2'  # IP du coordinateur 
@@ -32,23 +33,37 @@ def map_function(segment):
 
     return {"pizza_5stars": pizza_count}
 
-
 # ----------- CLIENT -----------
 def worker():
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    #time.sleep(10)  # ralentir volontairement de 10 secondes
-    sock.connect((HOST, PORT))
-    data = b""
-    while not data.endswith(b"\n"):
-        data += sock.recv(4096)
-    received = json.loads(data.decode())
-    segment = received['segment']
-    # Ajoute cette ligne ici 👇 pour simuler un worker lent
-    result = map_function(segment)
-    time.sleep(10)
-    msg = json.dumps({"result": result}) + '\n'
-    sock.sendall(msg.encode())
-    sock.close()
+    try:
+        sock.connect((HOST, PORT))
+        print(f"[INFO] Connecté au coordinateur {HOST}:{PORT}")
+        
+        # Réception des données
+        data = b""
+        while not data.endswith(b"\n"):
+            chunk = sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("Connexion perdue avec le coordinateur")
+            data += chunk
+            
+        received = json.loads(data.decode())
+        segment = received['segment']
+        
+        # Traitement des données
+        print("[INFO] Traitement du segment...")
+        result = map_function(segment)
+        
+        # Envoi du résultat
+        msg = json.dumps({"result": result}) + '\n'
+        sock.sendall(msg.encode())
+        print("[INFO] Résultat envoyé au coordinateur")
+        
+    except Exception as e:
+        print(f"[ERREUR] Erreur lors du traitement : {e}")
+    finally:
+        sock.close()
 
 if __name__ == '__main__':
     worker()

@@ -8,9 +8,7 @@ import json
 from collections import defaultdict
 import queue
 import time
-
-segment_queue = queue.Queue()
-
+from concurrent.futures import ThreadPoolExecutor
 
 # ----------- CONFIGURATION -----------
 HOST = '0.0.0.0'  # écoute toutes les IP
@@ -18,8 +16,12 @@ PORT = 5000
 NB_WORKERS = 2
 SEGMENT_FILE = 'yelp_academic_dataset_review.json'
 
-
-results = []  # résultats partiels reçus
+# File d'attente pour les segments
+segment_queue = queue.Queue()
+# File d'attente pour les résultats
+results_queue = queue.Queue()
+# Liste pour stocker les threads actifs
+active_threads = []
 
 # ----------- FONCTION MAP SIMPLIFIÉE -----------
 def clean_text(text):
@@ -42,7 +44,6 @@ def map_function(segment):
 
     return {"pizza_5stars": pizza_count}
 
-
 # ----------- FONCTION REDUCE -----------
 def reduce_function(results_list):
     final_result = defaultdict(int)
@@ -50,7 +51,6 @@ def reduce_function(results_list):
         for word, count in result.items():
             final_result[word] += count
     return dict(final_result)
-
 
 # ----------- GESTION D'UN WORKER -----------
 def handle_worker(conn, addr):
@@ -66,7 +66,6 @@ def handle_worker(conn, addr):
         segment_data = json.dumps({"segment": segment}) + '\n'
         conn.sendall(segment_data.encode())
 
-        # ➤ On met un timeout ici
         conn.settimeout(10)  # 10 secondes max pour réponse
 
         data = b""
@@ -77,7 +76,7 @@ def handle_worker(conn, addr):
             data += chunk
 
         response = json.loads(data.decode())
-        results.append(response['result'])
+        results_queue.put(response['result'])
         print(f"[INFO] Résultat reçu de {addr}")
 
     except (ConnectionError, socket.timeout, json.JSONDecodeError) as e:
@@ -87,8 +86,6 @@ def handle_worker(conn, addr):
     finally:
         conn.close()
 
-
-
 # ----------- DÉCOUPAGE DU FICHIER -----------
 def split_file(filename, n):
     with open(filename, 'r', encoding='utf-8') as f:
@@ -97,12 +94,21 @@ def split_file(filename, n):
     size = len(lines) // n
     segments = [''.join(lines[i*size:(i+1)*size]) for i in range(n)]
 
-    # Ajouter les lignes restantes au dernier segment
     if len(lines) % n != 0:
         segments[-1] += ''.join(lines[n*size:])
 
     return segments
 
+# ----------- GESTION DES RÉSULTATS -----------
+def process_results():
+    results = []
+    while len(results) < NB_WORKERS:
+        try:
+            result = results_queue.get(timeout=1)
+            results.append(result)
+        except queue.Empty:
+            continue
+    return results
 
 # ----------- SERVEUR PRINCIPAL -----------
 def start_server():
@@ -115,18 +121,24 @@ def start_server():
     server.listen(NB_WORKERS)
     print(f"[INFO] Serveur en écoute sur {HOST}:{PORT}")
 
-    while not segment_queue.empty():
-        conn, addr = server.accept()
-        threading.Thread(target=handle_worker, args=(conn, addr)).start()
+    # Créer un pool de threads pour gérer les connexions
+    with ThreadPoolExecutor(max_workers=NB_WORKERS) as executor:
+        while not segment_queue.empty():
+            conn, addr = server.accept()
+            thread = executor.submit(handle_worker, conn, addr)
+            active_threads.append(thread)
 
-    # attendre un peu que tous les threads finissent
-    time.sleep(3)
+    # Attendre que tous les threads soient terminés
+    for thread in active_threads:
+        thread.result()
 
+    # Récupérer et traiter les résultats
+    results = process_results()
     final = reduce_function(results)
+    
     with open("resultat_final.json", "w", encoding="utf-8") as f:
         json.dump(final, f, indent=2, ensure_ascii=False)
     print("[INFO] Résultat final écrit dans resultat_final.json")
-
 
 if __name__ == '__main__':
     start_server()
