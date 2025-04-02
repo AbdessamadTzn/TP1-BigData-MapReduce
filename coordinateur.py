@@ -15,10 +15,11 @@ import os
 HOST = '0.0.0.0'  # écoute toutes les IP
 PORT = 5000
 NB_WORKERS = 2
-CHUNK_SIZE = 256 * 1024  # Réduit à 256KB par segment
+CHUNK_SIZE = 5 * 1024 * 1024  # Augmenté à 5MB par segment
 MAX_RETRIES = 3  # Nombre maximum de tentatives pour un segment
 SEGMENT_FILE = 'yelp_academic_dataset_review.json'
-SOCKET_TIMEOUT = 60  # Timeout réduit à 1 minute
+SOCKET_TIMEOUT = 300  # Augmenté à 5 minutes
+MAX_CONCURRENT_WORKERS = 4  # Nombre maximum de workers simultanés
 
 # Files d'attente pour la gestion des segments et résultats
 segment_queue = queue.Queue()
@@ -199,7 +200,7 @@ def process_results():
 
 # ----------- SERVEUR PRINCIPAL -----------
 def start_server():
-    # Découpage du fichier en segments plus petits
+    # Découpage du fichier en segments plus grands
     segments = split_file(SEGMENT_FILE)
     for seg in segments:
         segment_queue.put(seg)
@@ -208,16 +209,16 @@ def start_server():
     print(f"[INFO] {total_segments} segments créés et mis en file d'attente")
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Permettre la réutilisation de l'adresse
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((HOST, PORT))
-    server.listen(NB_WORKERS)
+    server.listen(MAX_CONCURRENT_WORKERS)  # Augmenté pour plus de parallélisme
     print(f"[INFO] Serveur en écoute sur {HOST}:{PORT}")
 
-    with ThreadPoolExecutor(max_workers=NB_WORKERS) as executor:
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_WORKERS) as executor:
         while not segment_queue.empty():
             try:
                 conn, addr = server.accept()
-                conn.settimeout(SOCKET_TIMEOUT)  # Timeout réduit
+                conn.settimeout(SOCKET_TIMEOUT)
                 thread = executor.submit(handle_worker, conn, addr)
                 active_threads.append(thread)
                 print(f"[INFO] {segment_queue.qsize()}/{total_segments} segments restants")

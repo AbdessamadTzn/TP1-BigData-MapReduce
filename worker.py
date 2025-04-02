@@ -10,12 +10,14 @@ import time
 # ----------- CONFIGURATION -----------
 HOST = '172.20.10.2'  # IP du coordinateur 
 PORT = 5000
-BUFFER_SIZE = 4096  # Réduit à 4KB pour plus de stabilité
-SOCKET_TIMEOUT = 60  # Timeout réduit à 1 minute
+BUFFER_SIZE = 8192  # Augmenté à 8KB pour plus de performance
+SOCKET_TIMEOUT = 300  # Augmenté à 5 minutes
 
 # ----------- FONCTION MAP -----------
 def map_function(segment):
     pizza_count = 0
+    # Utilisation d'un buffer pour le traitement
+    buffer = []
     for line in segment.strip().splitlines():
         try:
             review = json.loads(line)
@@ -34,7 +36,7 @@ def receive_data(sock, expected_size):
             if not chunk:
                 raise ConnectionError("Connection perdue pendant la réception")
             data += chunk
-            if len(data) % (1024*1024) == 0:  # Log tous les 1MB
+            if len(data) % (5*1024*1024) == 0:  # Log tous les 5MB
                 print(f"[INFO] Reçu: {len(data)/1024/1024:.1f}MB / {expected_size/1024/1024:.1f}MB")
         except socket.timeout:
             raise ConnectionError("Timeout pendant la réception")
@@ -95,8 +97,8 @@ def send_data(sock, data):
                     raise RuntimeError("Connexion perdue")
                 total_sent += sent
                 
-                # Afficher la progression tous les 1MB
-                if total_sent % (1024 * 1024) == 0:
+                # Afficher la progression tous les 5MB
+                if total_sent % (5 * 1024 * 1024) == 0:
                     print(f"[INFO] Envoi: {total_sent / (1024 * 1024):.1f}MB / {len(data_bytes) / (1024 * 1024):.1f}MB")
             except socket.timeout:
                 raise ConnectionError("Timeout pendant l'envoi")
@@ -130,7 +132,7 @@ def worker():
                     
                 segment = received['segment']
                 segment_size = len(segment)
-                print(f"[INFO] Segment reçu ({segment_size/1024:.1f}KB)")
+                print(f"[INFO] Segment reçu ({segment_size/1024/1024:.1f}MB)")
                 
                 # Traitement du segment
                 print("[INFO] Traitement du segment...")
@@ -151,13 +153,13 @@ def worker():
             break
         except socket.timeout:
             print("[ERREUR] Timeout de la connexion")
-            time.sleep(2)
+            time.sleep(5)  # Attendre plus longtemps en cas de timeout
         except ConnectionError as e:
             print(f"[ERREUR] Erreur de connexion: {e}")
-            time.sleep(2)
+            time.sleep(5)  # Attendre plus longtemps en cas d'erreur de connexion
         except Exception as e:
             print(f"[ERREUR] Erreur lors du traitement : {e}")
-            time.sleep(2)  # Attendre plus longtemps avant de réessayer
+            time.sleep(5)  # Attendre plus longtemps en cas d'erreur
         finally:
             if sock:
                 try:
@@ -171,4 +173,4 @@ if __name__ == '__main__':
             worker()
         except Exception as e:
             print(f"[ERREUR] Erreur fatale du worker: {e}")
-            time.sleep(5)  # Attendre plus longtemps en cas d'erreur fatale
+            time.sleep(10)  # Attendre plus longtemps en cas d'erreur fatale
