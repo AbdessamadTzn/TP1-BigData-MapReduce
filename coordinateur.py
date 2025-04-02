@@ -15,10 +15,10 @@ import os
 HOST = '0.0.0.0'  # écoute toutes les IP
 PORT = 5000
 NB_WORKERS = 2
-CHUNK_SIZE = 5 * 1024 * 1024  # Augmenté à 5MB par segment
+CHUNK_SIZE = 256 * 1024  # Réduit à 256KB par segment
 MAX_RETRIES = 3  # Nombre maximum de tentatives pour un segment
 SEGMENT_FILE = 'yelp_academic_dataset_review.json'
-SOCKET_TIMEOUT = 300  # Augmenté à 5 minutes
+SOCKET_TIMEOUT = 60  # Réduit à 1 minute
 MAX_CONCURRENT_WORKERS = 4  # Nombre maximum de workers simultanés
 
 # Files d'attente pour la gestion des segments et résultats
@@ -55,7 +55,7 @@ def receive_data(sock, expected_size):
     """Reçoit des données avec gestion de la taille"""
     data = b""
     while len(data) < expected_size:
-        chunk = sock.recv(min(8192, expected_size - len(data)))
+        chunk = sock.recv(min(4096, expected_size - len(data)))
         if not chunk:
             raise ConnectionError("Connection perdue pendant la réception")
         data += chunk
@@ -80,7 +80,7 @@ def send_data(sock, data):
         data_bytes = data.encode('utf-8')
         total_sent = 0
         while total_sent < len(data_bytes):
-            sent = sock.send(data_bytes[total_sent:total_sent + 8192])
+            sent = sock.send(data_bytes[total_sent:total_sent + 4096])
             if sent == 0:
                 raise RuntimeError("Connexion perdue")
             total_sent += sent
