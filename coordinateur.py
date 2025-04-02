@@ -70,9 +70,6 @@ def send_data(sock, data):
         elif not isinstance(data, str):
             data = str(data)
             
-        # Ajouter un marqueur de fin
-        data = data + "\n"
-        
         # Envoyer la taille en premier
         size = len(data.encode('utf-8'))
         sock.sendall(str(size).encode('utf-8') + b"\n")

@@ -36,6 +36,25 @@ def receive_data(sock, expected_size):
             print(f"[INFO] Reçu: {len(data)/1024/1024:.1f}MB / {expected_size/1024/1024:.1f}MB")
     return data
 
+def receive_message(sock):
+    """Reçoit un message complet (taille + données)"""
+    # Lire la taille
+    size_str = receive_data(sock, 1024).decode('utf-8').strip()
+    if not size_str:
+        raise RuntimeError("Taille de données invalide")
+        
+    try:
+        size = int(size_str)
+    except ValueError:
+        raise RuntimeError(f"Taille invalide: {size_str}")
+        
+    if size <= 0:
+        raise RuntimeError(f"Taille de données invalide: {size}")
+    
+    # Lire les données
+    data = receive_data(sock, size)
+    return data.decode('utf-8').strip()
+
 def send_data(sock, data):
     """Envoie des données avec un en-tête de taille"""
     try:
@@ -82,22 +101,13 @@ def worker():
             sock.connect((HOST, PORT))
             print(f"[INFO] Connecté au coordinateur {HOST}:{PORT}")
             
-            # Réception de la taille des données
-            size_str = receive_data(sock, 1024).decode('utf-8').strip()
-            if not size_str:
-                raise RuntimeError("Taille de données invalide")
-                
-            size = int(size_str)
-            if size <= 0:
-                raise RuntimeError(f"Taille de données invalide: {size}")
-            
-            # Réception du segment
+            # Réception du message
             print("[INFO] Réception du segment...")
-            data = receive_data(sock, size)
+            message = receive_message(sock)
             
             # Décodage et extraction du segment
             try:
-                received = json.loads(data.decode('utf-8'))
+                received = json.loads(message)
                 if not isinstance(received, dict) or 'segment' not in received:
                     raise ValueError("Format de données invalide")
                     
