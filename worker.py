@@ -74,9 +74,11 @@ def send_data(sock, data):
 # ----------- CLIENT -----------
 def worker():
     while True:  # Boucle continue pour traiter plusieurs segments
+        sock = None
         try:
             # Connexion au coordinateur
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(300)  # 5 minutes timeout
             sock.connect((HOST, PORT))
             print(f"[INFO] Connecté au coordinateur {HOST}:{PORT}")
             
@@ -94,36 +96,44 @@ def worker():
             data = receive_data(sock, size)
             
             # Décodage et extraction du segment
-            received = json.loads(data.decode('utf-8'))
-            if not isinstance(received, dict) or 'segment' not in received:
-                raise ValueError("Format de données invalide")
+            try:
+                received = json.loads(data.decode('utf-8'))
+                if not isinstance(received, dict) or 'segment' not in received:
+                    raise ValueError("Format de données invalide")
+                    
+                segment = received['segment']
+                segment_size = len(segment)
+                print(f"[INFO] Segment reçu ({segment_size/1024/1024:.1f}MB)")
                 
-            segment = received['segment']
-            segment_size = len(segment)
-            print(f"[INFO] Segment reçu ({segment_size/1024/1024:.1f}MB)")
-            
-            # Traitement du segment
-            print("[INFO] Traitement du segment...")
-            result = map_function(segment)
-            print("[INFO] Traitement terminé")
-            
-            # Envoi du résultat
-            print("[INFO] Envoi du résultat...")
-            if not send_data(sock, {"result": result}):
-                raise RuntimeError("Échec de l'envoi du résultat")
-            print("[INFO] Résultat envoyé")
+                # Traitement du segment
+                print("[INFO] Traitement du segment...")
+                result = map_function(segment)
+                print("[INFO] Traitement terminé")
+                
+                # Envoi du résultat
+                print("[INFO] Envoi du résultat...")
+                if not send_data(sock, {"result": result}):
+                    raise RuntimeError("Échec de l'envoi du résultat")
+                print("[INFO] Résultat envoyé")
+                
+            except json.JSONDecodeError as e:
+                raise RuntimeError(f"Erreur de décodage JSON: {e}")
             
         except ConnectionRefusedError:
             print("[INFO] Plus de segments à traiter, arrêt du worker")
             break
+        except socket.timeout:
+            print("[ERREUR] Timeout de la connexion")
+            time.sleep(1)
         except Exception as e:
             print(f"[ERREUR] Erreur lors du traitement : {e}")
             time.sleep(1)  # Attendre un peu avant de réessayer
         finally:
-            try:
-                sock.close()
-            except:
-                pass
+            if sock:
+                try:
+                    sock.close()
+                except:
+                    pass
 
 if __name__ == '__main__':
     worker()
