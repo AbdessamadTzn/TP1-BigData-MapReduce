@@ -25,6 +25,7 @@ def map_function(segment):
     return {"pizza_5stars": pizza_count}
 
 def receive_data(sock, expected_size):
+    """Reçoit des données avec gestion de la taille"""
     data = b""
     while len(data) < expected_size:
         chunk = sock.recv(min(BUFFER_SIZE, expected_size - len(data)))
@@ -36,15 +37,39 @@ def receive_data(sock, expected_size):
     return data
 
 def send_data(sock, data):
-    size = len(data)
-    sock.sendall(str(size).encode() + b'\n')
-    
-    # Envoi par petits morceaux
-    for i in range(0, size, BUFFER_SIZE):
-        chunk = data[i:i + BUFFER_SIZE]
-        sock.sendall(chunk)
-        if i % (1024*1024) == 0:  # Log tous les 1MB
-            print(f"[INFO] Envoyé: {i/1024/1024:.1f}MB / {size/1024/1024:.1f}MB")
+    """Envoie des données avec un en-tête de taille"""
+    try:
+        # Convertir les données en JSON si nécessaire
+        if isinstance(data, dict):
+            data = json.dumps(data)
+        elif not isinstance(data, str):
+            data = str(data)
+            
+        # Ajouter un marqueur de fin
+        data = data + "\n"
+        
+        # Envoyer la taille en premier
+        size = len(data.encode('utf-8'))
+        sock.sendall(str(size).encode('utf-8') + b"\n")
+        
+        # Envoyer les données par morceaux
+        data_bytes = data.encode('utf-8')
+        total_sent = 0
+        while total_sent < len(data_bytes):
+            sent = sock.send(data_bytes[total_sent:total_sent + BUFFER_SIZE])
+            if sent == 0:
+                raise RuntimeError("Connexion perdue")
+            total_sent += sent
+            
+            # Afficher la progression tous les 1MB
+            if total_sent % (1024 * 1024) == 0:
+                print(f"[INFO] Envoi: {total_sent / (1024 * 1024):.1f}MB / {len(data_bytes) / (1024 * 1024):.1f}MB")
+                
+        print(f"[INFO] Envoi terminé: {total_sent / (1024 * 1024):.1f}MB")
+        return True
+    except Exception as e:
+        print(f"[ERREUR] Échec de l'envoi: {str(e)}")
+        return False
 
 # ----------- CLIENT -----------
 def worker():
@@ -56,15 +81,23 @@ def worker():
             print(f"[INFO] Connecté au coordinateur {HOST}:{PORT}")
             
             # Réception de la taille des données
-            size = int(sock.recv(1024).decode().strip())
-            print(f"[INFO] Taille du segment à recevoir: {size/1024/1024:.1f}MB")
+            size_str = receive_data(sock, 1024).decode('utf-8').strip()
+            if not size_str:
+                raise RuntimeError("Taille de données invalide")
+                
+            size = int(size_str)
+            if size <= 0:
+                raise RuntimeError(f"Taille de données invalide: {size}")
             
             # Réception du segment
             print("[INFO] Réception du segment...")
             data = receive_data(sock, size)
             
             # Décodage et extraction du segment
-            received = json.loads(data.decode())
+            received = json.loads(data.decode('utf-8'))
+            if not isinstance(received, dict) or 'segment' not in received:
+                raise ValueError("Format de données invalide")
+                
             segment = received['segment']
             segment_size = len(segment)
             print(f"[INFO] Segment reçu ({segment_size/1024/1024:.1f}MB)")
@@ -75,9 +108,9 @@ def worker():
             print("[INFO] Traitement terminé")
             
             # Envoi du résultat
-            result_data = json.dumps({"result": result}).encode()
             print("[INFO] Envoi du résultat...")
-            send_data(sock, result_data)
+            if not send_data(sock, {"result": result}):
+                raise RuntimeError("Échec de l'envoi du résultat")
             print("[INFO] Résultat envoyé")
             
         except ConnectionRefusedError:
@@ -87,7 +120,10 @@ def worker():
             print(f"[ERREUR] Erreur lors du traitement : {e}")
             time.sleep(1)  # Attendre un peu avant de réessayer
         finally:
-            sock.close()
+            try:
+                sock.close()
+            except:
+                pass
 
 if __name__ == '__main__':
     worker()
