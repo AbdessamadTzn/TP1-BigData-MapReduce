@@ -143,6 +143,15 @@ def handle_worker(conn, addr):
             except Exception as e:
                 raise RuntimeError(f"Erreur lors de la réception du résultat: {str(e)}")
                 
+        except ConnectionError as e:
+            print(f"[ERREUR] Erreur de connexion avec {addr}: {e}")
+            retries += 1
+            if retries >= MAX_RETRIES:
+                print(f"[ERREUR] Abandon du segment après {MAX_RETRIES} tentatives")
+                failed_segments.append(segment)
+            else:
+                segment_queue.put(segment)  # On remet le segment dans la queue pour réessayer
+            time.sleep(1)  # Attendre un peu avant de réessayer
         except Exception as e:
             print(f"[ERREUR] Worker {addr} a échoué (tentative {retries + 1}): {e}")
             retries += 1
@@ -201,24 +210,43 @@ def start_server():
     print(f"[INFO] {total_segments} segments créés et mis en file d'attente")
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Permettre la réutilisation de l'adresse
     server.bind((HOST, PORT))
     server.listen(NB_WORKERS)
     print(f"[INFO] Serveur en écoute sur {HOST}:{PORT}")
 
     with ThreadPoolExecutor(max_workers=NB_WORKERS) as executor:
         while not segment_queue.empty():
-            conn, addr = server.accept()
-            thread = executor.submit(handle_worker, conn, addr)
-            active_threads.append(thread)
-            print(f"[INFO] {segment_queue.qsize()}/{total_segments} segments restants")
+            try:
+                conn, addr = server.accept()
+                conn.settimeout(300)  # 5 minutes timeout
+                thread = executor.submit(handle_worker, conn, addr)
+                active_threads.append(thread)
+                print(f"[INFO] {segment_queue.qsize()}/{total_segments} segments restants")
+            except Exception as e:
+                print(f"[ERREUR] Erreur lors de l'acceptation d'une connexion: {e}")
+                continue
 
     print("[INFO] Attente de la fin du traitement des workers...")
     for thread in active_threads:
-        thread.result()
+        try:
+            thread.result()
+        except Exception as e:
+            print(f"[ERREUR] Erreur lors de l'attente d'un thread: {e}")
 
     results = []
     while not results_queue.empty():
-        results.append(results_queue.get())
+        try:
+            result = results_queue.get(timeout=1)
+            results.append(result)
+        except queue.Empty:
+            continue
+        except Exception as e:
+            print(f"[ERREUR] Erreur lors de la récupération d'un résultat: {e}")
+
+    if not results:
+        print("[ERREUR] Aucun résultat n'a été collecté!")
+        return
 
     final = reduce_function(results)
     print("[INFO] Traitement terminé, écriture des résultats...")

@@ -125,6 +125,9 @@ def worker():
         except socket.timeout:
             print("[ERREUR] Timeout de la connexion")
             time.sleep(1)
+        except ConnectionError as e:
+            print(f"[ERREUR] Erreur de connexion: {e}")
+            time.sleep(1)
         except Exception as e:
             print(f"[ERREUR] Erreur lors du traitement : {e}")
             time.sleep(1)  # Attendre un peu avant de réessayer
@@ -136,4 +139,9 @@ def worker():
                     pass
 
 if __name__ == '__main__':
-    worker()
+    while True:
+        try:
+            worker()
+        except Exception as e:
+            print(f"[ERREUR] Erreur fatale du worker: {e}")
+            time.sleep(5)  # Attendre plus longtemps en cas d'erreur fatale
