@@ -15,9 +15,10 @@ import os
 HOST = '0.0.0.0'  # écoute toutes les IP
 PORT = 5000
 NB_WORKERS = 2
-CHUNK_SIZE = 1 * 1024 * 1024  # Réduit à 1MB par segment
+CHUNK_SIZE = 256 * 1024  # Réduit à 256KB par segment
 MAX_RETRIES = 3  # Nombre maximum de tentatives pour un segment
 SEGMENT_FILE = 'yelp_academic_dataset_review.json'
+SOCKET_TIMEOUT = 60  # Timeout réduit à 1 minute
 
 # Files d'attente pour la gestion des segments et résultats
 segment_queue = queue.Queue()
@@ -99,7 +100,7 @@ def handle_worker(conn, addr):
     while retries < MAX_RETRIES:
         try:
             segment = segment_queue.get_nowait()
-            print(f"[INFO] Envoi segment de {len(segment)/1024/1024:.1f}MB à {addr} (tentative {retries + 1})")
+            print(f"[INFO] Envoi segment de {len(segment)/1024:.1f}KB à {addr} (tentative {retries + 1})")
         except queue.Empty:
             print(f"[INFO] Aucun segment à attribuer pour {addr}")
             conn.close()
@@ -148,7 +149,7 @@ def handle_worker(conn, addr):
                 failed_segments.append(segment)
             else:
                 segment_queue.put(segment)  # On remet le segment dans la queue pour réessayer
-            time.sleep(1)  # Attendre un peu avant de réessayer
+            time.sleep(2)  # Attendre plus longtemps avant de réessayer
         except Exception as e:
             print(f"[ERREUR] Worker {addr} a échoué (tentative {retries + 1}): {e}")
             retries += 1
@@ -157,7 +158,7 @@ def handle_worker(conn, addr):
                 failed_segments.append(segment)
             else:
                 segment_queue.put(segment)  # On remet le segment dans la queue pour réessayer
-            time.sleep(1)  # Attendre un peu avant de réessayer
+            time.sleep(2)  # Attendre plus longtemps avant de réessayer
 
     conn.close()
 
@@ -216,7 +217,7 @@ def start_server():
         while not segment_queue.empty():
             try:
                 conn, addr = server.accept()
-                conn.settimeout(300)  # 5 minutes timeout
+                conn.settimeout(SOCKET_TIMEOUT)  # Timeout réduit
                 thread = executor.submit(handle_worker, conn, addr)
                 active_threads.append(thread)
                 print(f"[INFO] {segment_queue.qsize()}/{total_segments} segments restants")

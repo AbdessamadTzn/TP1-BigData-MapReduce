@@ -10,7 +10,8 @@ import time
 # ----------- CONFIGURATION -----------
 HOST = '172.20.10.2'  # IP du coordinateur 
 PORT = 5000
-BUFFER_SIZE = 8192  # Taille du buffer pour la réception/envoi
+BUFFER_SIZE = 4096  # Réduit à 4KB pour plus de stabilité
+SOCKET_TIMEOUT = 60  # Timeout réduit à 1 minute
 
 # ----------- FONCTION MAP -----------
 def map_function(segment):
@@ -28,40 +29,48 @@ def receive_data(sock, expected_size):
     """Reçoit des données avec gestion de la taille"""
     data = b""
     while len(data) < expected_size:
-        chunk = sock.recv(min(BUFFER_SIZE, expected_size - len(data)))
-        if not chunk:
-            raise ConnectionError("Connection perdue pendant la réception")
-        data += chunk
-        if len(data) % (1024*1024) == 0:  # Log tous les 1MB
-            print(f"[INFO] Reçu: {len(data)/1024/1024:.1f}MB / {expected_size/1024/1024:.1f}MB")
+        try:
+            chunk = sock.recv(min(BUFFER_SIZE, expected_size - len(data)))
+            if not chunk:
+                raise ConnectionError("Connection perdue pendant la réception")
+            data += chunk
+            if len(data) % (1024*1024) == 0:  # Log tous les 1MB
+                print(f"[INFO] Reçu: {len(data)/1024/1024:.1f}MB / {expected_size/1024/1024:.1f}MB")
+        except socket.timeout:
+            raise ConnectionError("Timeout pendant la réception")
     return data
 
 def receive_message(sock):
     """Reçoit un message complet (taille + données)"""
-    # Lire la taille
-    size_data = receive_data(sock, 1024).decode('utf-8').strip()
-    if not size_data:
-        raise RuntimeError("Taille de données invalide")
-    
-    # Séparer la taille du reste des données
     try:
-        size_str, rest = size_data.split('\n', 1)
-        size = int(size_str)
-    except (ValueError, IndexError):
-        raise RuntimeError(f"Format de taille invalide: {size_data}")
+        # Lire la taille
+        size_data = receive_data(sock, 1024).decode('utf-8').strip()
+        if not size_data:
+            raise RuntimeError("Taille de données invalide")
         
-    if size <= 0:
-        raise RuntimeError(f"Taille de données invalide: {size}")
-    
-    # Lire le reste des données
-    remaining_size = size - len(rest.encode('utf-8'))
-    if remaining_size > 0:
-        additional_data = receive_data(sock, remaining_size)
-        data = rest + additional_data.decode('utf-8')
-    else:
-        data = rest
-    
-    return data.strip()
+        # Séparer la taille du reste des données
+        try:
+            size_str, rest = size_data.split('\n', 1)
+            size = int(size_str)
+        except (ValueError, IndexError):
+            raise RuntimeError(f"Format de taille invalide: {size_data}")
+            
+        if size <= 0:
+            raise RuntimeError(f"Taille de données invalide: {size}")
+        
+        # Lire le reste des données
+        remaining_size = size - len(rest.encode('utf-8'))
+        if remaining_size > 0:
+            additional_data = receive_data(sock, remaining_size)
+            data = rest + additional_data.decode('utf-8')
+        else:
+            data = rest
+        
+        return data.strip()
+    except socket.timeout:
+        raise ConnectionError("Timeout pendant la réception du message")
+    except Exception as e:
+        raise RuntimeError(f"Erreur lors de la réception du message: {str(e)}")
 
 def send_data(sock, data):
     """Envoie des données avec un en-tête de taille"""
@@ -80,14 +89,17 @@ def send_data(sock, data):
         data_bytes = data.encode('utf-8')
         total_sent = 0
         while total_sent < len(data_bytes):
-            sent = sock.send(data_bytes[total_sent:total_sent + BUFFER_SIZE])
-            if sent == 0:
-                raise RuntimeError("Connexion perdue")
-            total_sent += sent
-            
-            # Afficher la progression tous les 1MB
-            if total_sent % (1024 * 1024) == 0:
-                print(f"[INFO] Envoi: {total_sent / (1024 * 1024):.1f}MB / {len(data_bytes) / (1024 * 1024):.1f}MB")
+            try:
+                sent = sock.send(data_bytes[total_sent:total_sent + BUFFER_SIZE])
+                if sent == 0:
+                    raise RuntimeError("Connexion perdue")
+                total_sent += sent
+                
+                # Afficher la progression tous les 1MB
+                if total_sent % (1024 * 1024) == 0:
+                    print(f"[INFO] Envoi: {total_sent / (1024 * 1024):.1f}MB / {len(data_bytes) / (1024 * 1024):.1f}MB")
+            except socket.timeout:
+                raise ConnectionError("Timeout pendant l'envoi")
                 
         print(f"[INFO] Envoi terminé: {total_sent / (1024 * 1024):.1f}MB")
         return True
@@ -102,7 +114,7 @@ def worker():
         try:
             # Connexion au coordinateur
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(300)  # 5 minutes timeout
+            sock.settimeout(SOCKET_TIMEOUT)
             sock.connect((HOST, PORT))
             print(f"[INFO] Connecté au coordinateur {HOST}:{PORT}")
             
@@ -118,7 +130,7 @@ def worker():
                     
                 segment = received['segment']
                 segment_size = len(segment)
-                print(f"[INFO] Segment reçu ({segment_size/1024/1024:.1f}MB)")
+                print(f"[INFO] Segment reçu ({segment_size/1024:.1f}KB)")
                 
                 # Traitement du segment
                 print("[INFO] Traitement du segment...")
@@ -139,13 +151,13 @@ def worker():
             break
         except socket.timeout:
             print("[ERREUR] Timeout de la connexion")
-            time.sleep(1)
+            time.sleep(2)
         except ConnectionError as e:
             print(f"[ERREUR] Erreur de connexion: {e}")
-            time.sleep(1)
+            time.sleep(2)
         except Exception as e:
             print(f"[ERREUR] Erreur lors du traitement : {e}")
-            time.sleep(1)  # Attendre un peu avant de réessayer
+            time.sleep(2)  # Attendre plus longtemps avant de réessayer
         finally:
             if sock:
                 try:
