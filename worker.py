@@ -39,21 +39,29 @@ def receive_data(sock, expected_size):
 def receive_message(sock):
     """Reçoit un message complet (taille + données)"""
     # Lire la taille
-    size_str = receive_data(sock, 1024).decode('utf-8').strip()
-    if not size_str:
+    size_data = receive_data(sock, 1024).decode('utf-8').strip()
+    if not size_data:
         raise RuntimeError("Taille de données invalide")
-        
+    
+    # Séparer la taille du reste des données
     try:
+        size_str, rest = size_data.split('\n', 1)
         size = int(size_str)
-    except ValueError:
-        raise RuntimeError(f"Taille invalide: {size_str}")
+    except (ValueError, IndexError):
+        raise RuntimeError(f"Format de taille invalide: {size_data}")
         
     if size <= 0:
         raise RuntimeError(f"Taille de données invalide: {size}")
     
-    # Lire les données
-    data = receive_data(sock, size)
-    return data.decode('utf-8').strip()
+    # Lire le reste des données
+    remaining_size = size - len(rest.encode('utf-8'))
+    if remaining_size > 0:
+        additional_data = receive_data(sock, remaining_size)
+        data = rest + additional_data.decode('utf-8')
+    else:
+        data = rest
+    
+    return data.strip()
 
 def send_data(sock, data):
     """Envoie des données avec un en-tête de taille"""
@@ -64,9 +72,6 @@ def send_data(sock, data):
         elif not isinstance(data, str):
             data = str(data)
             
-        # Ajouter un marqueur de fin
-        data = data + "\n"
-        
         # Envoyer la taille en premier
         size = len(data.encode('utf-8'))
         sock.sendall(str(size).encode('utf-8') + b"\n")
