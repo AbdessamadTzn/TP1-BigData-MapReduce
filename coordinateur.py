@@ -14,14 +14,16 @@ import os
 # ----------- CONFIGURATION -----------
 HOST = '0.0.0.0'  # écoute toutes les IP
 PORT = 5000
-NB_WORKERS = 2  # Retour à 2 workers
-CHUNK_SIZE = 5 * 1024 * 1024  # Réduit à 5MB par segment pour accélérer le traitement
+NB_WORKERS = 2
+CHUNK_SIZE = 1 * 1024 * 1024  # Réduit à 1MB par segment
+MAX_RETRIES = 3  # Nombre maximum de tentatives pour un segment
 SEGMENT_FILE = 'yelp_academic_dataset_review.json'
 
 # Files d'attente pour la gestion des segments et résultats
 segment_queue = queue.Queue()
 results_queue = queue.Queue()
 active_threads = []
+failed_segments = []
 
 # ----------- FONCTION MAP SIMPLIFIÉE -----------
 def clean_text(text):
@@ -48,43 +50,57 @@ def reduce_function(results_list):
 
 # ----------- GESTION D'UN WORKER -----------
 def handle_worker(conn, addr):
-    try:
-        segment = segment_queue.get_nowait()
-        print(f"[INFO] Envoi segment de {len(segment)/1024/1024:.1f}MB à {addr}")
-    except queue.Empty:
-        print(f"[INFO] Aucun segment à attribuer pour {addr}")
-        conn.close()
-        return
+    retries = 0
+    while retries < MAX_RETRIES:
+        try:
+            segment = segment_queue.get_nowait()
+            print(f"[INFO] Envoi segment de {len(segment)/1024/1024:.1f}MB à {addr} (tentative {retries + 1})")
+        except queue.Empty:
+            print(f"[INFO] Aucun segment à attribuer pour {addr}")
+            conn.close()
+            return
 
-    try:
-        # Envoi du segment avec compression
-        segment_data = json.dumps({"segment": segment}).encode('utf-8')
-        size = len(segment_data)
-        conn.sendall(str(size).encode() + b'\n')
-        conn.sendall(segment_data)
+        try:
+            # Envoi du segment avec compression
+            segment_data = json.dumps({"segment": segment}).encode('utf-8')
+            size = len(segment_data)
+            conn.sendall(str(size).encode() + b'\n')
+            
+            # Envoi par petits morceaux de 8KB
+            for i in range(0, size, 8192):
+                chunk = segment_data[i:i + 8192]
+                conn.sendall(chunk)
+                if i % (1024*1024) == 0:  # Log tous les 1MB
+                    print(f"[INFO] Envoi à {addr}: {i/1024/1024:.1f}MB / {size/1024/1024:.1f}MB")
 
-        # Réception du résultat avec progression
-        conn.settimeout(300)  # 5 minutes timeout
-        size = int(conn.recv(1024).decode().strip())
-        data = b""
-        while len(data) < size:
-            chunk = conn.recv(min(4096, size - len(data)))
-            if not chunk:
-                raise ConnectionError("Connection perdue")
-            data += chunk
-            if len(data) % (1024*1024) == 0:  # Log tous les 1MB
-                print(f"[INFO] Reçu de {addr}: {len(data)/1024/1024:.1f}MB / {size/1024/1024:.1f}MB")
+            # Réception du résultat
+            conn.settimeout(300)  # 5 minutes timeout
+            size = int(conn.recv(1024).decode().strip())
+            data = b""
+            while len(data) < size:
+                chunk = conn.recv(min(8192, size - len(data)))
+                if not chunk:
+                    raise ConnectionError("Connection perdue")
+                data += chunk
+                if len(data) % (1024*1024) == 0:
+                    print(f"[INFO] Reçu de {addr}: {len(data)/1024/1024:.1f}MB / {size/1024/1024:.1f}MB")
 
-        response = json.loads(data.decode())
-        results_queue.put(response['result'])
-        print(f"[INFO] Résultat reçu de {addr}")
+            response = json.loads(data.decode())
+            results_queue.put(response['result'])
+            print(f"[INFO] Résultat reçu de {addr}")
+            return  # Succès, on sort de la fonction
 
-    except Exception as e:
-        print(f"[ERREUR] Worker {addr} a échoué : {e}")
-        segment_queue.put(segment)  # Réassigner le segment
+        except Exception as e:
+            print(f"[ERREUR] Worker {addr} a échoué (tentative {retries + 1}): {e}")
+            retries += 1
+            if retries >= MAX_RETRIES:
+                print(f"[ERREUR] Abandon du segment après {MAX_RETRIES} tentatives")
+                failed_segments.append(segment)
+            else:
+                segment_queue.put(segment)  # On remet le segment dans la queue pour réessayer
+            time.sleep(1)  # Attendre un peu avant de réessayer
 
-    finally:
-        conn.close()
+    conn.close()
 
 # ----------- DÉCOUPAGE DU FICHIER -----------
 def split_file(filename):

@@ -10,6 +10,7 @@ import time
 # ----------- CONFIGURATION -----------
 HOST = '172.20.10.2'  # IP du coordinateur 
 PORT = 5000
+BUFFER_SIZE = 8192  # Taille du buffer pour la réception/envoi
 
 # ----------- FONCTION MAP -----------
 def map_function(segment):
@@ -23,6 +24,28 @@ def map_function(segment):
             continue
     return {"pizza_5stars": pizza_count}
 
+def receive_data(sock, expected_size):
+    data = b""
+    while len(data) < expected_size:
+        chunk = sock.recv(min(BUFFER_SIZE, expected_size - len(data)))
+        if not chunk:
+            raise ConnectionError("Connection perdue pendant la réception")
+        data += chunk
+        if len(data) % (1024*1024) == 0:  # Log tous les 1MB
+            print(f"[INFO] Reçu: {len(data)/1024/1024:.1f}MB / {expected_size/1024/1024:.1f}MB")
+    return data
+
+def send_data(sock, data):
+    size = len(data)
+    sock.sendall(str(size).encode() + b'\n')
+    
+    # Envoi par petits morceaux
+    for i in range(0, size, BUFFER_SIZE):
+        chunk = data[i:i + BUFFER_SIZE]
+        sock.sendall(chunk)
+        if i % (1024*1024) == 0:  # Log tous les 1MB
+            print(f"[INFO] Envoyé: {i/1024/1024:.1f}MB / {size/1024/1024:.1f}MB")
+
 # ----------- CLIENT -----------
 def worker():
     while True:  # Boucle continue pour traiter plusieurs segments
@@ -34,17 +57,11 @@ def worker():
             
             # Réception de la taille des données
             size = int(sock.recv(1024).decode().strip())
+            print(f"[INFO] Taille du segment à recevoir: {size/1024/1024:.1f}MB")
             
             # Réception du segment
-            data = b""
             print("[INFO] Réception du segment...")
-            while len(data) < size:
-                chunk = sock.recv(min(4096, size - len(data)))
-                if not chunk:
-                    raise ConnectionError("Connection perdue")
-                data += chunk
-                if len(data) % (1024*1024) == 0:  # Log tous les 1MB
-                    print(f"[INFO] Reçu {len(data)/1024/1024:.1f}MB / {size/1024/1024:.1f}MB")
+            data = receive_data(sock, size)
             
             # Décodage et extraction du segment
             received = json.loads(data.decode())
@@ -59,9 +76,8 @@ def worker():
             
             # Envoi du résultat
             result_data = json.dumps({"result": result}).encode()
-            size = len(result_data)
-            sock.sendall(str(size).encode() + b'\n')
-            sock.sendall(result_data)
+            print("[INFO] Envoi du résultat...")
+            send_data(sock, result_data)
             print("[INFO] Résultat envoyé")
             
         except ConnectionRefusedError:
